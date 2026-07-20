@@ -481,7 +481,7 @@ class BLEManager private constructor(private val context: Context) {
                 // (sensor searching, or watch not on wrist). Don't transmit it.
                 if (bpm <= 0 || event.accuracy == SensorManager.SENSOR_STATUS_NO_CONTACT) return
                 val now = System.currentTimeMillis()
-                if (now - lastHrSentMs < 900) return // ~1 Hz
+                if (now - lastHrSentMs < 30_000) return // send at most once every 30s
                 lastHrSentMs = now
                 val json = "{" +
                         "\"type\":\"heart_rate\"," +

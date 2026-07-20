@@ -36,9 +36,6 @@ class BLEManager: NSObject, ObservableObject {
     // Message queue for when not connected
     private var messageQueue: [BLEData] = []
     
-    // Reconnect state
-    private var reconnectAttempt = 0
-    private var reconnectTimer: Timer?
     private var keepaliveTimer: Timer?
     
     override init() {
@@ -128,41 +125,6 @@ class BLEManager: NSObject, ObservableObject {
     
     // MARK: - Private Methods
     
-    private func scheduleReconnect() {
-        reconnectTimer?.invalidate()
-        
-        let delay = min(pow(2.0, Double(reconnectAttempt)), 30.0) // 1s, 2s, 4s, 8s, 16s, 30s...
-        reconnectAttempt = min(reconnectAttempt + 1, 6)
-        
-        print("Reconnecting in \(delay)s (attempt \(reconnectAttempt))")
-        
-        reconnectTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-            guard let self = self, !self.isConnected else { return }
-            
-            if let peripheral = self.connectedDevice {
-                // Direct reconnect
-                self.connectionStatus = "Reconnecting..."
-                self.centralManager.connect(peripheral, options: nil)
-            } else if let uuidString = UserDefaults.standard.string(forKey: "lastPeripheralUUID"),
-                      let uuid = UUID(uuidString: uuidString) {
-                // Try to retrieve by UUID
-                let retrieved = self.centralManager.retrievePeripherals(withIdentifiers: [uuid])
-                if let peripheral = retrieved.first {
-                    self.connectedDevice = peripheral
-                    peripheral.delegate = self
-                    self.connectionStatus = "Reconnecting..."
-                    self.centralManager.connect(peripheral, options: nil)
-                } else {
-                    // Fall back to scan
-                    self.startScanning()
-                }
-            } else {
-                // No saved peripheral - scan
-                self.startScanning()
-            }
-        }
-    }
-    
     private func startKeepalive() {
         stopKeepalive()
         keepaliveTimer = Timer.scheduledTimer(withTimeInterval: 20.0, repeats: true) { [weak self] _ in
@@ -180,8 +142,15 @@ class BLEManager: NSObject, ObservableObject {
     }
     
     private func sendData(_ data: Data, characteristicUUID: CBUUID) {
-        // Only write when the peripheral is truly connected — otherwise CoreBluetooth
-        // logs "API MISUSE … can only accept commands while in the connected state".
+        // Self-heal: if our `isConnected` flag says connected but CoreBluetooth's own
+        // peripheral.state disagrees (this happens if a delegate callback was somehow
+        // missed), don't just silently queue forever — treat it as a real disconnect
+        // and kick off the same recovery path as didDisconnectPeripheral would.
+        if isConnected, let peripheral = connectedDevice, peripheral.state != .connected {
+            print("⚠️ State desync detected: isConnected=true but peripheral.state=\(peripheral.state.rawValue). Forcing reconnect.")
+            handleDisconnect(peripheral)
+        }
+
         guard isConnected,
               let peripheral = connectedDevice,
               peripheral.state == .connected,
@@ -192,6 +161,20 @@ class BLEManager: NSObject, ObservableObject {
         }
 
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
+    }
+
+    /// Shared recovery path for any loss of connection, whether reported via
+    /// didDisconnectPeripheral, didFailToConnect, or detected defensively in sendData.
+    private func handleDisconnect(_ peripheral: CBPeripheral) {
+        isConnected = false
+        watchBatteryLevel = nil
+        stopKeepalive()
+
+        // Issue an outstanding connect(): unlike a Timer (suspended when backgrounded),
+        // a pending connect to a known peripheral has no timeout and reconnects
+        // automatically — even in the background — the instant the watch advertises again.
+        connectionStatus = "Reconnecting..."
+        centralManager.connect(peripheral, options: nil)
     }
     
     private func flushMessageQueue() {
@@ -291,9 +274,7 @@ extension BLEManager: CBCentralManagerDelegate {
         
         // Save for fast reconnect
         UserDefaults.standard.set(peripheral.identifier.uuidString, forKey: "lastPeripheralUUID")
-        reconnectAttempt = 0
-        reconnectTimer?.invalidate()
-        
+
         // Start keepalive (ping every 20 seconds)
         startKeepalive()
         
@@ -307,22 +288,17 @@ extension BLEManager: CBCentralManagerDelegate {
         } else {
             print("Disconnected from \(peripheral.name ?? "Unknown"): clean (no error)")
         }
+        handleDisconnect(peripheral)
+    }
 
+    func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        // Without this handler, a failed reconnect attempt (e.g. the watch hasn't
+        // re-advertised yet after a brief drop) went completely unhandled — the app
+        // would sit at "Reconnecting..." forever with no further retry. Fall back to
+        // scanning, which picks up the watch's advertisement once it's back up.
+        print("❌ Failed to connect to \(peripheral.name ?? "Unknown"): \(error?.localizedDescription ?? "no error") — falling back to scan")
         isConnected = false
-        watchBatteryLevel = nil
-        stopKeepalive()
-
-        // Keep the peripheral reference and issue an outstanding connect(): unlike a
-        // Timer (which is suspended when the app is backgrounded), a pending connect
-        // to a known peripheral has no timeout and reconnects automatically — even in
-        // the background — the instant the watch advertises again.
-        if let peripheral = connectedDevice {
-            connectionStatus = "Reconnecting..."
-            central.connect(peripheral, options: nil)
-        } else {
-            connectionStatus = "Disconnected"
-            scheduleReconnect()
-        }
+        startScanning()
     }
 }
 
