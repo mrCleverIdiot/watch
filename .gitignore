@@ -1,0 +1,51 @@
+# ── macOS / OS ──────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Secrets / signing (NEVER commit) ────────────────────────
+keystore.properties
+*.jks
+*.keystore
+*.p12
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.env
+.env
+.env.*
+secrets.xcconfig
+
+# ── Xcode / iOS (WatchBridge/) ──────────────────────────────
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+*.moved-aside
+*.xcscmblueprint
+
+# ── Android / Gradle / Wear OS (watch/wearos/) ──────────────
+.gradle/
+.kotlin/
+local.properties
+*.iml
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+
+# ── Editors ─────────────────────────────────────────────────
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Logs / temp ─────────────────────────────────────────────
+*.log
+*.tmp

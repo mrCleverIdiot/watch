@@ -4,16 +4,34 @@ plugins {
     id 'org.jetbrains.kotlin.plugin.compose'
 }
 
+// Release signing is loaded from keystore.properties (git-ignored) when present,
+// so CI/other machines without the keystore can still assemble debug builds.
+def keystorePropsFile = rootProject.file("keystore.properties")
+def hasKeystore = keystorePropsFile.exists()
+def keystoreProps = new Properties()
+if (hasKeystore) { keystoreProps.load(new FileInputStream(keystorePropsFile)) }
+
 android {
     namespace 'com.watchbridge'
     compileSdk 35
 
     defaultConfig {
-        applicationId "com.watchbridge"
+        applicationId "com.vikastejani.watchbridge"
         minSdk 30
         targetSdk 35
         versionCode 1
         versionName "1.0.0"
+    }
+
+    signingConfigs {
+        if (hasKeystore) {
+            create("release") {
+                storeFile file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
     }
 
     buildTypes {
@@ -21,6 +39,9 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (hasKeystore) {
+                signingConfig signingConfigs.getByName("release")
+            }
         }
     }
 

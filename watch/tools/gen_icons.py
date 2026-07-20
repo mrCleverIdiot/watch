@@ -12,9 +12,11 @@ import os
 import math
 from PIL import Image, ImageDraw
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-IOS_ICONSET = os.path.join(ROOT, "watchbridge", "WatchBridge", "Assets.xcassets", "AppIcon.appiconset")
-ANDROID_RES = os.path.join(ROOT, "watchos", "WatchBridge", "app", "src", "main", "res")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # the watch/ dir
+REPO = os.path.dirname(ROOT)  # repo root (watch_bridge/)
+# iOS icons live in the real Xcode project at <repo>/WatchBridge/WatchBridge/.
+IOS_ICONSET = os.path.join(REPO, "WatchBridge", "WatchBridge", "Assets.xcassets", "AppIcon.appiconset")
+ANDROID_RES = os.path.join(ROOT, "wearos", "WatchBridge", "app", "src", "main", "res")
 
 # ---- palette ---------------------------------------------------------------
 INDIGO = (79, 70, 229)      # #4F46E5

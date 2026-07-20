@@ -21,9 +21,6 @@ captures/
 *.ap_
 *.aab
 build/
-watchos/WatchBridge/.gradle/
-watchos/WatchBridge/build/
-watchos/WatchBridge/captures/
 
 # macOS
 .DS_Store
