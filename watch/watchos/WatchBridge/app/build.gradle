@@ -1,0 +1,55 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'org.jetbrains.kotlin.plugin.compose'
+}
+
+android {
+    namespace 'com.watchbridge'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.watchbridge"
+        minSdk 30
+        targetSdk 35
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    buildFeatures {
+        compose true
+    }
+    // Compose compiler is configured by the org.jetbrains.kotlin.plugin.compose
+    // plugin (Kotlin 2.0+); kotlinCompilerExtensionVersion is no longer needed.
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.15.0'
+    implementation 'androidx.activity:activity-compose:1.9.3'
+    implementation 'com.google.android.gms:play-services-wearable:18.2.0'
+
+    def wearCompose = '1.4.1'
+    implementation "androidx.wear.compose:compose-material:$wearCompose"
+    implementation "androidx.wear.compose:compose-foundation:$wearCompose"
+    implementation "androidx.wear.compose:compose-navigation:$wearCompose"
+
+    implementation 'androidx.work:work-runtime-ktx:2.10.0'
+}
+

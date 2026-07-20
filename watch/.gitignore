@@ -1,0 +1,53 @@
+# iOS
+*.xcuserstate
+*.xcworkspace/
+*.xcodeproj/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+DerivedData/
+
+# Android
+*.iml
+.gradle/
+local.properties
+.navigation/
+captures/
+.externalNativeBuild
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.aab
+build/
+watchos/WatchBridge/.gradle/
+watchos/WatchBridge/build/
+watchos/WatchBridge/captures/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+ehthumbs.db
+
+# Build output
+*.o
+*.a
+*.dylib
+*.framework
+*.app
+*.ipa
+
+# Logs
+*.log
+*.tmp
+
