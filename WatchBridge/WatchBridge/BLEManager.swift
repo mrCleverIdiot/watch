@@ -180,14 +180,17 @@ class BLEManager: NSObject, ObservableObject {
     }
     
     private func sendData(_ data: Data, characteristicUUID: CBUUID) {
+        // Only write when the peripheral is truly connected — otherwise CoreBluetooth
+        // logs "API MISUSE … can only accept commands while in the connected state".
         guard isConnected,
               let peripheral = connectedDevice,
+              peripheral.state == .connected,
               let characteristic = discoveredCharacteristics.first(where: { $0.uuid == characteristicUUID }) else {
             // Queue message for later
             messageQueue.append(BLEData(data: data, characteristicUUID: characteristicUUID))
             return
         }
-        
+
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
     }
     

@@ -460,6 +460,15 @@ class BLEManager private constructor(private val context: Context) {
             Log.w(TAG, "BODY_SENSORS permission not granted; cannot stream HR")
             return
         }
+        // Fetch the sensor lazily *here* — `getDefaultSensor(TYPE_HEART_RATE)` returns
+        // null until BODY_SENSORS is granted, and startHosting() may have run before the
+        // user granted it, caching a null. Re-resolve now that permission is confirmed.
+        if (sensorManager == null) {
+            sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        }
+        if (heartRateSensor == null) {
+            heartRateSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_HEART_RATE)
+        }
         if (heartRateSensor == null) {
             Log.w(TAG, "No heart rate sensor available")
             return
