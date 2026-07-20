@@ -27,6 +27,12 @@ class HealthManager {
         if type == "heart_rate" {
             if let bpm = json["bpm"] as? Double ?? (json["bpm"] as? Int).map(Double.init),
                let ts = json["ts"] as? Double {
+                // A 0 (or negative) reading means the sensor has no skin contact
+                // or isn't measuring yet — never write that to Health.
+                guard bpm > 0 else {
+                    print("⏭️ Ignoring invalid HR sample: bpm=\(bpm)")
+                    return
+                }
                 print("🩺 Parsed HR sample: bpm=\(bpm), ts=\(ts)")
                 saveHeartRate(bpm: bpm, timestampMs: ts)
             }
@@ -35,7 +41,7 @@ class HealthManager {
                 var hkSamples: [HKQuantitySample] = []
                 for s in samples {
                     guard let bpm = s["bpm"] as? Double ?? (s["bpm"] as? Int).map(Double.init),
-                          let ts = s["ts"] as? Double else { continue }
+                          let ts = s["ts"] as? Double, bpm > 0 else { continue }
                     let date = Date(timeIntervalSince1970: ts / 1000.0)
                     let qty = HKQuantity(unit: bpmUnit, doubleValue: bpm)
                     hkSamples.append(HKQuantitySample(type: heartType, quantity: qty, start: date, end: date))

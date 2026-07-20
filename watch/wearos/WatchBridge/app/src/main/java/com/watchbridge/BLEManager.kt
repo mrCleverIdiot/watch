@@ -3,8 +3,11 @@ package com.watchbridge
 import android.Manifest
 import android.bluetooth.*
 import android.bluetooth.le.*
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import androidx.core.content.IntentCompat
 import android.os.Build
 import android.os.ParcelUuid
 import android.os.Handler
@@ -48,6 +51,8 @@ class BLEManager private constructor(private val context: Context) {
     var connectionCallback: ((Boolean) -> Unit)? = null
     private var clientConnecting = false
     private var isServerConnected = false // Track GATT server state
+    private var connectedDevice: BluetoothDevice? = null
+    private var bondReceiver: BroadcastReceiver? = null
 
     companion object {
         private const val TAG = "BLEManager"
@@ -125,6 +130,7 @@ class BLEManager private constructor(private val context: Context) {
 
     // Server mode: advertise + GATT server so iPhone can discover us
     fun startHosting() {
+        registerBondReceiver()
         startGattServer()
         startAdvertising()
         sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
@@ -134,6 +140,40 @@ class BLEManager private constructor(private val context: Context) {
     fun stopHosting() {
         advertiser?.stopAdvertising(advertiseCallback)
         gattServer?.close()
+        bondReceiver?.let { try { context.unregisterReceiver(it) } catch (_: Exception) {} }
+        bondReceiver = null
+    }
+
+    /** Begin streaming only after the link is authenticated + encrypted (bonded). */
+    private fun startSecureSession(device: BluetoothDevice) {
+        Log.d(TAG, "🔐 Secure session established with ${device.address} — streaming")
+        startServerKeepAlive(device)
+        startHeartRateStream(device)
+    }
+
+    /** Watch for pairing completing/removal so we can start or tear down streaming. */
+    private fun registerBondReceiver() {
+        if (bondReceiver != null) return
+        bondReceiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: android.content.Intent) {
+                if (intent.action != BluetoothDevice.ACTION_BOND_STATE_CHANGED) return
+                val device = IntentCompat.getParcelableExtra(
+                    intent, BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java
+                ) ?: return
+                when (intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE)) {
+                    BluetoothDevice.BOND_BONDED ->
+                        if (device.address == connectedDevice?.address) startSecureSession(device)
+                    BluetoothDevice.BOND_NONE ->
+                        if (device.address == connectedDevice?.address) {
+                            Log.w(TAG, "Bond removed — stopping streaming and dropping ${device.address}")
+                            stopServerKeepAlive()
+                            stopHeartRateStream()
+                            try { gattServer?.cancelConnection(device) } catch (_: Exception) {}
+                        }
+                }
+            }
+        }
+        context.registerReceiver(bondReceiver, IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED))
     }
 
     private fun startGattServer() {
@@ -142,12 +182,19 @@ class BLEManager private constructor(private val context: Context) {
 
         fun rwNotify(uuid: UUID): BluetoothGattCharacteristic {
             val props = BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_NOTIFY or BluetoothGattCharacteristic.PROPERTY_READ
-            val perms = BluetoothGattCharacteristic.PERMISSION_WRITE or BluetoothGattCharacteristic.PERMISSION_READ
+            // ENCRYPTED_MITM forces the Android stack to require an authenticated
+            // (LE Secure Connections, numeric-comparison) pairing before any read/
+            // write is honoured — so nothing is readable over the air unless the
+            // iPhone is bonded, and an attacker cannot MITM the pairing.
+            val perms = BluetoothGattCharacteristic.PERMISSION_WRITE_ENCRYPTED_MITM or
+                    BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED_MITM
             val characteristic = BluetoothGattCharacteristic(uuid, props, perms)
-            // Add CCCD so iOS can enable notifications
+            // CCCD also requires an encrypted link, so subscribing to notifications
+            // (heart rate, PONG, keepalive) forces pairing too.
             val cccd = BluetoothGattDescriptor(
                 UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"),
-                BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE
+                BluetoothGattDescriptor.PERMISSION_READ_ENCRYPTED_MITM or
+                        BluetoothGattDescriptor.PERMISSION_WRITE_ENCRYPTED_MITM
             )
             characteristic.addDescriptor(cccd)
             return characteristic
@@ -166,16 +213,24 @@ class BLEManager private constructor(private val context: Context) {
 
     private val gattServerCallback = object : BluetoothGattServerCallback() {
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-            Log.d(TAG, "Server conn state: $newState for ${device.address}")
+            Log.d(TAG, "Server conn state: $newState for ${device.address} (bond=${device.bondState})")
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                connectedDevice = device
                 isConnected = true
                 isServerConnected = true
                 connectionCallback?.invoke(true)
                 // Stop advertising once a central is connected
                 advertiser?.stopAdvertising(advertiseCallback)
-                startServerKeepAlive(device)
-                startHeartRateStream(device)
+                if (device.bondState == BluetoothDevice.BOND_BONDED) {
+                    startSecureSession(device)
+                } else {
+                    // Not paired yet: accessing our encrypted characteristics will
+                    // trigger pairing on the iPhone. We start streaming data only
+                    // once BOND_BONDED arrives (see bondReceiver).
+                    Log.d(TAG, "🔒 Central not bonded — waiting for pairing before streaming")
+                }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                connectedDevice = null
                 isConnected = false
                 isServerConnected = false
                 connectionCallback?.invoke(false)
@@ -195,6 +250,15 @@ class BLEManager private constructor(private val context: Context) {
             offset: Int,
             value: ByteArray
         ) {
+            // Defense in depth: never process inbound data (notifications, contacts,
+            // and eventually SMS/OTP) from a device that hasn't completed pairing.
+            if (device.bondState != BluetoothDevice.BOND_BONDED) {
+                Log.w(TAG, "Rejecting write from unbonded device ${device.address}")
+                if (responseNeeded) {
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_INSUFFICIENT_AUTHENTICATION, offset, null)
+                }
+                return
+            }
             Log.d(TAG, "Write to ${characteristic.uuid}")
             if (responseNeeded) {
                 gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
@@ -326,6 +390,9 @@ class BLEManager private constructor(private val context: Context) {
             override fun onSensorChanged(event: SensorEvent) {
                 if (event.sensor.type != Sensor.TYPE_HEART_RATE) return
                 val bpm = event.values.firstOrNull()?.toInt() ?: return
+                // 0/negative bpm or no-contact accuracy = not a real measurement
+                // (sensor searching, or watch not on wrist). Don't transmit it.
+                if (bpm <= 0 || event.accuracy == SensorManager.SENSOR_STATUS_NO_CONTACT) return
                 val now = System.currentTimeMillis()
                 if (now - lastHrSentMs < 900) return // ~1 Hz
                 lastHrSentMs = now

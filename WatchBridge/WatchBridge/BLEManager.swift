@@ -54,9 +54,10 @@ class BLEManager: NSObject, ObservableObject {
             ]
             centralManager = CBCentralManager(delegate: self, queue: nil, options: options)
         }
-        if peripheralManager == nil {
-            peripheralManager = CBPeripheralManager(delegate: self, queue: nil)
-        }
+        // NOTE: We intentionally do NOT start a CBPeripheralManager. The watch is the
+        // GATT server and the iPhone is purely the central. Advertising the same
+        // service UUID here (as the old code did) put the radio in a conflicting
+        // dual role and served no one — the watch never connects back to us.
     }
     
     // MARK: - Public Methods
@@ -296,17 +297,27 @@ extension BLEManager: CBCentralManagerDelegate {
     }
     
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        print("Disconnected from: \(peripheral.name ?? "Unknown")")
-        
+        // Log the reason so a recurring drop can be diagnosed (timeout vs. peer-closed vs. clean).
+        if let error = error {
+            print("Disconnected from \(peripheral.name ?? "Unknown"): \(error.localizedDescription)")
+        } else {
+            print("Disconnected from \(peripheral.name ?? "Unknown"): clean (no error)")
+        }
+
         isConnected = false
-        connectionStatus = "Disconnected"
         stopKeepalive()
-        
-        // Keep peripheral reference for reconnect
-        // Don't set connectedDevice = nil
-        
-        // Reconnect with exponential backoff
-        scheduleReconnect()
+
+        // Keep the peripheral reference and issue an outstanding connect(): unlike a
+        // Timer (which is suspended when the app is backgrounded), a pending connect
+        // to a known peripheral has no timeout and reconnects automatically — even in
+        // the background — the instant the watch advertises again.
+        if let peripheral = connectedDevice {
+            connectionStatus = "Reconnecting..."
+            central.connect(peripheral, options: nil)
+        } else {
+            connectionStatus = "Disconnected"
+            scheduleReconnect()
+        }
     }
 }
 
@@ -363,7 +374,19 @@ extension BLEManager: CBPeripheralDelegate {
     
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
-            print("Write error: \(error.localizedDescription)")
+            // On the very first connection this may report an authentication error
+            // while iOS is still completing pairing; it retries automatically once bonded.
+            print("Write error on \(characteristic.uuid): \(error.localizedDescription)")
+        }
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        // Subscribing to our encrypted characteristics forces pairing. A success here
+        // means the link is now bonded + encrypted (LE Secure Connections).
+        if let error = error {
+            print("🔒 Subscribe/pairing failed on \(characteristic.uuid): \(error.localizedDescription)")
+        } else {
+            print("🔐 Secured & subscribed to \(characteristic.uuid) — link is encrypted")
         }
     }
 
@@ -406,17 +429,7 @@ extension BLEManager: CBPeripheralDelegate {
 
 extension BLEManager: CBPeripheralManagerDelegate {
     func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
-        switch peripheral.state {
-        case .poweredOn:
-            // Advertise as BLE peripheral for watch discovery
-            let advertisementData: [String: Any] = [
-                CBAdvertisementDataLocalNameKey: "iPhone-WatchBridge",
-                CBAdvertisementDataServiceUUIDsKey: [serviceUUID]
-            ]
-            peripheralManager.startAdvertising(advertisementData)
-        default:
-            peripheralManager.stopAdvertising()
-        }
+        // Intentionally unused: the iPhone is a BLE central only (see start()).
     }
 }
 
