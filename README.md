@@ -13,16 +13,24 @@ iPhone acts as the **central** that connects, reads and writes.
 | Feature | Status |
 |---|---|
 | ❤️ **Heart-rate → Apple Health** — watch streams HR, iPhone writes `HKQuantitySample` | ✅ Working end-to-end |
-| 🔗 **Auto reconnect + keepalive** — exponential backoff, PING/PONG, time sync | ✅ Working |
-| 🔔 Notification forwarding | 🔧 In progress (see roadmap) |
-| 📞 Call events / caller ID | 🔧 In progress |
+| 🔔 **Notification mirroring** — all iPhone notifications appear on the watch via ANCS | ✅ Working |
+| 📞 **Incoming-call alerts + Answer/Decline** — from the watch, via ANCS actions | ✅ Working |
+| 🔕 **Per-app filter** — phone settings screen to mute apps (keep OTP/bank on phone only) | ✅ Working |
+| 🔐 **Encrypted + bonded link** — LE Secure Connections (MITM); unbonded devices rejected | ✅ Working |
+| 🔗 **Auto reconnect + keepalive** | ✅ Working |
 | 🎵 Media control | 🔧 In progress |
 | 👤 Contacts sync (caller ID) | 🔧 In progress |
 | 📍 Find-my-device ring | 🔧 In progress |
 
-> **Privacy by design:** communication is Bluetooth-only. There is no `INTERNET`
-> permission on the watch app, health data is written solely to the user's local
-> Apple Health store, and Android backup is disabled.
+> **How notifications/calls work:** the watch is a BLE peripheral (for heart rate) and
+> *also* a GATT client that reads Apple's **ANCS** from the bonded iPhone — the standard
+> accessory model. iOS exposes ANCS only over an encrypted, bonded link, so mirroring is
+> gated behind pairing.
+
+> **Privacy by design:** communication is Bluetooth-only (no `INTERNET` permission on the
+> watch), the link is encrypted + MITM-authenticated, health data stays in the local Apple
+> Health store, Android backup is disabled, and any app can be muted so sensitive
+> notifications (banking / OTP) never leave the phone.
 
 ---
 

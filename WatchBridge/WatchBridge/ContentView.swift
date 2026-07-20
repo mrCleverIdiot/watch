@@ -40,8 +40,19 @@ struct ContentView: View {
         }
     }
     
+    // MARK: - Helpers
+
+    private func batteryIcon(_ level: Int) -> String {
+        // Classic SF Symbols available on iOS 15.
+        switch level {
+        case ...15: return "battery.0"
+        case ...50: return "battery.25"
+        default: return "battery.100"
+        }
+    }
+
     // MARK: - Subviews
-    
+
     private var connectionStatusCard: some View {
         VStack(spacing: 12) {
             Circle()
@@ -56,7 +67,13 @@ struct ContentView: View {
             Text(bleManager.connectionStatus)
                 .font(.headline)
                 .foregroundColor(bleManager.isConnected ? .green : .red)
-            
+
+            if let battery = bleManager.watchBatteryLevel {
+                Label("Watch \(battery)%", systemImage: batteryIcon(battery))
+                    .font(.subheadline)
+                    .foregroundColor(battery <= 20 ? .red : .secondary)
+            }
+
             if !bleManager.isConnected {
                 Button("Connect Watch") {
                     bleManager.startScanning()
@@ -180,7 +197,8 @@ struct SettingsView: View {
     @State private var healthPermission = false
     @State private var contactsPermission = false
     @State private var notificationsPermission = false
-    
+    @ObservedObject private var filterStore = NotificationFilterStore.shared
+
     var body: some View {
         NavigationView {
             List {
@@ -229,10 +247,29 @@ struct SettingsView: View {
                         BLEManager.shared.stopScanning()
                         BLEManager.shared.startScanning()
                     }
-                    
+
                     Button("Sync Contacts Now") {
                         ContactsManager.shared.syncContactsToWatch()
                     }
+                }
+
+                Section {
+                    if filterStore.discoveredApps.isEmpty {
+                        Text("Apps appear here as they send notifications. Toggle one off to stop mirroring it to your watch.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(filterStore.discoveredApps, id: \.self) { appId in
+                            Toggle(appDisplayName(appId), isOn: Binding(
+                                get: { !filterStore.isBlocked(appId) },
+                                set: { filterStore.setBlocked(appId, !$0) }
+                            ))
+                        }
+                    }
+                } header: {
+                    Text("Mirror to Watch")
+                } footer: {
+                    Text("Turn an app off to keep its notifications (e.g. banking / OTP) on your phone only.")
                 }
             }
             .navigationTitle("Settings")
@@ -322,6 +359,11 @@ struct SettingsView: View {
                 notificationsPermission = granted
             }
         }
+    }
+
+    /// Turn an iOS bundle id (e.g. "net.whatsapp.WhatsApp") into a readable label.
+    private func appDisplayName(_ appId: String) -> String {
+        appId.split(separator: ".").last.map(String.init) ?? appId
     }
 }
 

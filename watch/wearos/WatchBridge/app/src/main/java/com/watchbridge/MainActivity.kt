@@ -58,6 +58,11 @@ class MainActivity : ComponentActivity() {
             if (checkSelfPermission(Manifest.permission.BODY_SENSORS) != PackageManager.PERMISSION_GRANTED) {
                 needs.add(Manifest.permission.BODY_SENSORS)
             }
+            // Posting mirrored notifications (Android 13+)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                needs.add(Manifest.permission.POST_NOTIFICATIONS)
+            }
             if (needs.isNotEmpty()) {
                 requestPermissions(needs.toTypedArray(), permissionsRequestCode)
                 return

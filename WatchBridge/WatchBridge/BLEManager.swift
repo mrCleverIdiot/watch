@@ -12,6 +12,7 @@ class BLEManager: NSObject, ObservableObject {
     @Published var isConnected = false
     @Published var connectedDevice: CBPeripheral?
     @Published var connectionStatus: String = "Disconnected"
+    @Published var watchBatteryLevel: Int?   // % reported by the watch, nil if unknown
     
     // MARK: - BLE Properties
     private var centralManager: CBCentralManager!
@@ -305,6 +306,7 @@ extension BLEManager: CBCentralManagerDelegate {
         }
 
         isConnected = false
+        watchBatteryLevel = nil
         stopKeepalive()
 
         // Keep the peripheral reference and issue an outstanding connect(): unlike a
@@ -354,6 +356,9 @@ extension BLEManager: CBPeripheralDelegate {
 
         // Send initial time sync to watch after characteristics are ready
         sendTimeSync()
+
+        // Push the current notification mute-list so the watch enforces it immediately.
+        pushNotificationFilter()
     }
     
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
@@ -397,9 +402,34 @@ extension BLEManager: CBPeripheralDelegate {
     
     private func handleControlCommand(_ data: Data) {
         guard let command = String(data: data, encoding: .utf8) else { return }
-        
+
         if command == "PING" {
             sendControlCommand("PONG")
+            return
+        }
+        // JSON control messages from the watch.
+        guard command.hasPrefix("{"),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        switch json["type"] as? String {
+        case "SEEN_APP":
+            if let appId = json["appId"] as? String { NotificationFilterStore.shared.noteSeen(appId) }
+        case "BATTERY":
+            if let level = json["level"] as? Int {
+                DispatchQueue.main.async { self.watchBatteryLevel = level }
+            }
+        default:
+            break
+        }
+    }
+
+    /// Push the user's muted-app list to the watch, which enforces it on ANCS notifications.
+    func pushNotificationFilter() {
+        let payload: [String: Any] = [
+            "type": "NOTIF_FILTER",
+            "blocked": Array(NotificationFilterStore.shared.blockedApps)
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: payload) {
+            sendData(data, characteristicUUID: controlCharUUID)
         }
     }
     

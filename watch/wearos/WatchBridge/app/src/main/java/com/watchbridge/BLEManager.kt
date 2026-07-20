@@ -54,6 +54,12 @@ class BLEManager private constructor(private val context: Context) {
     private var connectedDevice: BluetoothDevice? = null
     private var bondReceiver: BroadcastReceiver? = null
 
+    // ANCS (iPhone notification/call mirroring) — active only once bonded.
+    private var ancsClient: AncsClient? = null
+    private var notificationForwarder: NotificationForwarder? = null
+    /** App identifiers (iOS bundle IDs) the user has muted; pushed from the phone. */
+    @Volatile var blockedApps: Set<String> = emptySet()
+
     companion object {
         private const val TAG = "BLEManager"
         
@@ -144,11 +150,56 @@ class BLEManager private constructor(private val context: Context) {
         bondReceiver = null
     }
 
-    /** Begin streaming only after the link is authenticated + encrypted (bonded). */
+    /** Begin streaming + notification mirroring once the link is bonded/encrypted. */
     private fun startSecureSession(device: BluetoothDevice) {
         Log.d(TAG, "🔐 Secure session established with ${device.address} — streaming")
         startServerKeepAlive(device)
         startHeartRateStream(device)
+        startAncs(device)
+    }
+
+    /** Open a GATT client back to the (bonded) iPhone and mirror its ANCS notifications. */
+    private fun startAncs(device: BluetoothDevice) {
+        val forwarder = notificationForwarder ?: NotificationForwarder(context).also { notificationForwarder = it }
+        ancsClient?.close()
+        Log.d(TAG, "Starting ANCS client for ${device.address} (bond=${device.bondState}) in 1s")
+        ancsClient = AncsClient(
+            context,
+            onAdded = onAdded@{ n ->
+                reportSeenApp(n.appId) // let the phone list this app in settings
+                if (blockedApps.any { n.appId.equals(it, ignoreCase = true) }) {
+                    Log.d(TAG, "Muted app, not mirroring: ${n.appId}")
+                    return@onAdded
+                }
+                if (n.categoryId == AncsClient.CATEGORY_INCOMING_CALL) forwarder.postCall(n)
+                else forwarder.post(n)
+            },
+            onRemoved = { uid -> forwarder.cancel(uid) }
+        )
+        // Let the freshly-bonded link settle (MTU/CCCD writes on the server side)
+        // before opening the second GATT-client role to the iPhone.
+        keepAliveHandler.postDelayed({ ancsClient?.connect(device) }, 1000)
+    }
+
+    private fun stopAncs() {
+        ancsClient?.close()
+        ancsClient = null
+    }
+
+    /** Answer/decline a mirrored call (invoked from the call notification actions). */
+    fun performAncsAction(uid: Int, actionId: Int) {
+        ancsClient?.performAction(uid, actionId)
+    }
+
+    private val seenApps = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    /** Report a newly-seen iOS app id up to the phone so it can appear in the filter UI. */
+    private fun reportSeenApp(appId: String) {
+        if (appId.isBlank() || !seenApps.add(appId)) return
+        val ctrl = gattServer?.getService(serviceUUID)?.getCharacteristic(controlCharUUID) ?: return
+        val dev = connectedDevice ?: return
+        val json = JSONObject().put("type", "SEEN_APP").put("appId", appId).toString()
+        notify(dev, ctrl, json.toByteArray(Charsets.UTF_8))
     }
 
     /** Watch for pairing completing/removal so we can start or tear down streaming. */
@@ -168,6 +219,7 @@ class BLEManager private constructor(private val context: Context) {
                             Log.w(TAG, "Bond removed — stopping streaming and dropping ${device.address}")
                             stopServerKeepAlive()
                             stopHeartRateStream()
+                            stopAncs()
                             try { gattServer?.cancelConnection(device) } catch (_: Exception) {}
                         }
                 }
@@ -238,6 +290,7 @@ class BLEManager private constructor(private val context: Context) {
                 startAdvertising()
                 stopServerKeepAlive()
                 stopHeartRateStream()
+                stopAncs()
             }
         }
 
@@ -295,6 +348,13 @@ class BLEManager private constructor(private val context: Context) {
                                     Log.e(TAG, "Failed to open date settings: ${e.message}")
                                 }
                             }
+                        } else if (type == "NOTIF_FILTER") {
+                            // Phone pushes the muted-app list; enforce it on future ANCS notifications.
+                            val arr = obj.optJSONArray("blocked")
+                            val set = HashSet<String>()
+                            if (arr != null) for (i in 0 until arr.length()) set.add(arr.getString(i))
+                            blockedApps = set
+                            Log.d(TAG, "🔕 Notification filter updated: ${set.size} muted app(s)")
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to parse control JSON: ${e.message}")
@@ -353,6 +413,8 @@ class BLEManager private constructor(private val context: Context) {
 
     private fun startServerKeepAlive(device: BluetoothDevice) {
         stopServerKeepAlive()
+        reportBattery(device) // send once immediately on connect
+        var tick = 0
         keepAliveRunnable = object : Runnable {
             override fun run() {
                 try {
@@ -364,11 +426,27 @@ class BLEManager private constructor(private val context: Context) {
                 } catch (e: Exception) {
                     Log.e(TAG, "KeepAlive notify failed: ${e.message}")
                 }
-                // Schedule next
+                // Report battery every 15 minutes (every 90th 10s keepalive tick).
+                if (++tick % 90 == 0) reportBattery(device)
                 keepAliveHandler.postDelayed(this, 10000)
             }
         }
         keepAliveHandler.postDelayed(keepAliveRunnable!!, 10000)
+    }
+
+    /** Send the watch's battery level to the phone over the control characteristic. */
+    private fun reportBattery(device: BluetoothDevice) {
+        try {
+            val bm = context.getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager ?: return
+            val pct = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            if (pct < 0 || pct > 100) return
+            val ctrl = gattServer?.getService(serviceUUID)?.getCharacteristic(controlCharUUID) ?: return
+            val json = JSONObject().put("type", "BATTERY").put("level", pct).toString()
+            notify(device, ctrl, json.toByteArray(Charsets.UTF_8))
+            Log.d(TAG, "🔋 Battery reported: $pct%")
+        } catch (e: Exception) {
+            Log.e(TAG, "Battery report failed: ${e.message}")
+        }
     }
 
     private fun stopServerKeepAlive() {

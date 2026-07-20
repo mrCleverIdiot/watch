@@ -40,33 +40,27 @@ a real release, are **recommended** hardening, or are already **done**.
 
 ---
 
-## 🚧 Blocking — must resolve before shipping
+## ✅ Resolved since first audit
+- **Notifications & incoming calls** now work via **ANCS** (watch = GATT client of the
+  iPhone) with Answer/Decline — no unsupported CallKit/notification hacks.
+- **Pairing/encryption**: characteristics require `PERMISSION_*_ENCRYPTED_MITM`; the
+  watch rejects unbonded devices and only streams after bonding (LE Secure Connections).
+- **iOS Xcode project** exists, signed, capabilities + privacy manifest configured.
+- **Per-app notification filter** lets users keep OTP/banking on the phone only.
+- **iOS reconnect** moved off `Timer` to an outstanding CoreBluetooth `connect()` (works backgrounded).
+- **Invalid HR (≤0)** no longer transmitted/saved.
 
-- [ ] **BLE payloads > ~20 bytes are unreliable.** No MTU negotiation or chunking.
-      Android's `onCharacteristicWriteRequest` ignores `offset`/`preparedWrite`, so
-      long writes (contacts, notification bodies) won't reassemble. Add
-      `requestMtu(517)` on connect + a chunk/reassembly framing layer on both sides.
-- [ ] **Watch drops most inbound data.** The Android GATT server only handles the
-      control characteristic; notification/call/contacts/find-device writes are
-      ACK'd and discarded, with no UI. Wire these through to the watch UI or remove
-      the features from the product surface.
-- [ ] **iOS platform walls (see README "Technical Notes"):** third-party
-      notification mirroring, controlling the system Phone app via CallKit, and
-      controlling other apps' media via `MPRemoteCommandCenter` are **not possible**
-      as designed. Decide per feature: redesign (notifications → ANCS with the phone
-      as peripheral) or remove. Do not ship non-functional features.
-- [ ] **iOS background timers don't fire.** Keepalive/reconnect use
-      `Timer.scheduledTimer` on the main run loop, which is suspended in the
-      background. Drive keepalive from CoreBluetooth events and register a
-      `BGTaskScheduler` handler (the `fetch`/`processing` background modes are
-      declared but unused).
-- [ ] **No pairing/encryption on the GATT link.** Characteristics use plain
-      read/write permissions and no bonding, so contacts sync over an
-      unauthenticated channel. Require encryption
-      (`PERMISSION_*_ENCRYPTED` / bonding) before syncing personal data.
-- [ ] **iOS project file.** Only loose Swift sources exist — no `.xcodeproj`.
-      Create the project, set deployment target (iOS 15+), signing team, bundle ID,
-      and wire the entitlements file before an archive/upload is possible.
+## 🚧 Blocking — must resolve before shipping
+- [ ] **Large custom-service payloads still unframed.** ANCS traffic is fine (MTU
+      negotiated + Data-Source reassembly implemented), but the *custom* service's
+      contacts sync would exceed one MTU. Add chunk/reassembly framing before enabling
+      contacts sync (notifications/calls do not need it — they ride ANCS).
+- [ ] **Remaining "in progress" features** (media control, contacts sync, find-device)
+      are still not wired end-to-end. Ship as ✅ only once implemented, or hide them.
+- [ ] **`BGTaskScheduler` not registered.** The `fetch`/`processing` background modes
+      are declared but unused; either implement a handler or drop the modes.
+- [ ] **On-device ANCS validation.** Confirm the specific Galaxy Watch model completes
+      MITM pairing and that iOS exposes ANCS over the bonded link (see verification).
 
 ## 🔶 Recommended hardening
 
